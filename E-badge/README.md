@@ -3,7 +3,7 @@
 เว็บสำหรับออกแบบป้ายและส่งเข้า E-paper badge ผ่าน Bluetooth ไม่ต้องติดตั้งอะไร เปิดในเบราว์เซอร์ใช้ได้เลย
 
 - เว็บ: ___URL ที่ deploy แล้ว___
-- Firmware: ___ลิงก์ repo firmware___
+- Firmware: [___ลิงก์ repo firmware___](https://github.com/NowayStayNomyarn/E-Badge-Firmware/)
 
 ## ทำอะไรได้
 
@@ -33,33 +33,13 @@
 
 ใช้ได้กับการ์ด NTAG213/215/216 เท่านั้น และข้อมูลเดิมในการ์ดจะถูกเขียนทับ
 
-## รันในเครื่อง
-
-```bash
-python3 -m http.server 8000
-```
-แล้วเปิด http://localhost:8000 ใน Chrome
-
-## Deploy ด้วย GitHub Pages
-
-1. วาง `index.html` ไว้ที่ root ของ repo แล้ว push
-2. ไปที่ Settings → Pages
-3. เลือก Branch `main` และโฟลเดอร์ `/ (root)` แล้วกด Save
-4. รอสักครู่ จะได้ลิงก์ `https://<user>.github.io/<repo>/`
-
 ## เทคโนโลยี
 
-HTML, CSS, JavaScript ล้วน (ไม่มี framework ไม่ต้อง build) ใช้ Web Bluetooth ติดต่อป้าย และเก็บประวัติในเบราว์เซอร์ (localStorage)
+HTML, CSS, JavaScript ล้วน ใช้ Web Bluetooth ติดต่อป้าย และเก็บประวัติในเบราว์เซอร์ (localStorage)
 
-## ไฟล์ในโปรเจกต์
-
-```
-index.html    แอปทั้งหมด
-docs/         เอกสารประกอบ (Statement of Work, use case, flowchart)
-```
 
 ## ทีม
 
 | ชื่อ | หน้าที่ |
 |---|---|
-| ___ | ___ |
+| นนทกร ศรีบุตรตา | ออกแบบระบบและเขียน PCB |
