@@ -2,7 +2,7 @@
 
 เว็บสำหรับออกแบบป้ายและส่งเข้า E-paper badge ผ่าน Bluetooth ไม่ต้องติดตั้งอะไร เปิดในเบราว์เซอร์ใช้ได้เลย
 
-- เว็บ: ___URL ที่ deploy แล้ว___
+- เว็บ: [URL](https://nowaystaynomyarn.github.io/E-Badge-Webapp/E-badge/Webapp/) 
 - Firmware: [___ลิงก์ repo firmware___](https://github.com/NowayStayNomyarn/E-Badge-Firmware/)
 
 ## ทำอะไรได้
