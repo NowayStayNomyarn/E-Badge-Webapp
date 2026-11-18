@@ -149,6 +149,14 @@ progress{width:100%;height:10px;margin-top:10px}
   <div id="v-log" hidden>
     <div class="card"><div class="row" style="justify-content:space-between"><b>รูปที่ส่งเข้าป้าย</b><button id="clrImgs">ล้างรูปทั้งหมด</button></div><div class="gal" id="imgLog"></div></div>
     <div class="card"><div class="row" style="justify-content:space-between"><b>ประวัติการเชื่อมต่อ (Link)</b><button id="clrLinks">ล้าง</button></div><div id="linkLog"></div></div>
+    <div class="card">
+      <b>ThingsBoard (ส่ง log ขึ้นคลาวด์)</b>
+      <div class="hint mt">ส่งรูปที่อัปโหลดและลิงก์ที่เขียนลงการ์ด พร้อมเวลา ไปเก็บใน ThingsBoard</div>
+      <div class="mt"><input type="text" id="tbHost" placeholder="Host เช่น eu.thingsboard.cloud" autocomplete="off" style="width:100%"></div>
+      <div class="mt"><input type="password" id="tbToken" placeholder="Device access token" autocomplete="off" style="width:100%"></div>
+      <div class="row mt"><label><input type="checkbox" id="tbOn"> ส่ง log อัตโนมัติ</label><button id="tbTest">ทดสอบส่ง</button></div>
+      <div class="hint mt" id="tbMsg" role="status"></div>
+    </div>
   </div>
 </div>
 
@@ -257,7 +265,7 @@ $('reset').onclick=()=>{S.zoom=1;S.ox=0;S.oy=0;sync();render()};
 function loadFile(f){
   if(!f||!f.type.startsWith('image/'))return;
   const i=new Image();
-  i.onload=()=>{img=i;S.zoom=1;S.ox=0;S.oy=0;sync();if($('layout').value==='text')$('layout').value='imgtext';render()};
+  i.onload=()=>{img=i;S.zoom=1;S.ox=0;S.oy=0;sync();if($('layout').value==='text')$('layout').value='imgtext';render();tbSend({event:'image_upload',file:f.name,img:thumb()})};
   i.src=URL.createObjectURL(f);
 }
 $('drop').onclick=()=>$('file').click();
@@ -328,14 +336,42 @@ async function sendBytes(bytes){
 let pendingUrl='';
 function nfcDone(ok){$('cancelNfc').hidden=true;$('writeNfc').disabled=false;addLink((ok?'เขียนลิงก์ลงการ์ดสำเร็จ: ':'เขียนลิงก์ลงการ์ดล้มเหลว: ')+pendingUrl,pendingUrl)}
 async function writeLink(u){
-  if(!dev||!dev.gatt.connected){say('ยังไม่ได้เชื่อมต่อป้าย');return}
   if(!/^https?:\/\//i.test(u)||new TextEncoder().encode(u).length>100){say('ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https:// และยาวไม่เกิน 100 ตัวอักษร');return}
+  tbSend({event:'link',link:u});
+  if(!dev||!dev.gatt.connected){say('ยังไม่ได้เชื่อมต่อป้าย');return}
   pendingUrl=u;$('writeNfc').disabled=true;$('cancelNfc').hidden=false;
   try{await ch.link.writeValueWithResponse(new TextEncoder().encode(u))}
   catch(e){say('ส่งลิงก์ไม่สำเร็จ: '+e.message);$('writeNfc').disabled=false;$('cancelNfc').hidden=true}
 }
 $('writeNfc').onclick=()=>writeLink($('url').value.trim());
 $('cancelNfc').onclick=async()=>{try{await ch.link.writeValueWithResponse(new Uint8Array(0))}catch(e){}$('cancelNfc').hidden=true;$('writeNfc').disabled=false;say('ยกเลิกแล้ว')};
+// ---------- ThingsBoard log (settings stay in this browser only) ----------
+const TB='epaper_badge_tb_v1';
+// >>> วาง Host และ Device access token ของ ThingsBoard ที่นี่ (ฝังในโค้ด ใช้ได้ทันทีโดยไม่ต้องกรอกในหน้าเว็บ) <<<
+const TB_HOST='eu.thingsboard.cloud';
+const TB_TOKEN='';   // เช่น 'AbCdEf123456'
+const tbCfg=()=>{let c={};try{c=JSON.parse(localStorage.getItem(TB))||{}}catch(e){}
+  return {host:c.host||TB_HOST,token:c.token||TB_TOKEN,on:c.on!==undefined?c.on:!!TB_TOKEN}};
+function tbSaveCfg(){try{localStorage.setItem(TB,JSON.stringify({host:$('tbHost').value.trim(),token:$('tbToken').value.trim(),on:$('tbOn').checked}))}catch(e){}}
+function thumb(){const c=document.createElement('canvas');c.width=148;c.height=64;c.getContext('2d').drawImage($('preview'),0,0,148,64);return c.toDataURL('image/png')}
+async function tbSend(values){
+  const c=tbCfg(); if(!c.on||!c.host||!c.token)return false;
+  const url='https://'+c.host.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/api/v1/'+encodeURIComponent(c.token)+'/telemetry';
+  const body=JSON.stringify({ts:Date.now(),values});
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
+    $('tbMsg').textContent=r.ok?'ส่ง log ขึ้น ThingsBoard แล้ว':'ThingsBoard ตอบ '+r.status+' (เช็ค token)';return r.ok;
+  }catch(e){   // probably blocked by CORS: resend as a "simple" request; the reply cannot be read
+    try{await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body});
+      $('tbMsg').textContent='ส่งแล้ว แต่อ่านผลตอบกลับไม่ได้ ให้ตรวจใน ThingsBoard ว่าข้อมูลเข้าไหม';return true}
+    catch(e2){$('tbMsg').textContent='ส่งไม่สำเร็จ: '+e2.message;return false}
+  }
+}
+(()=>{const c=tbCfg();$('tbHost').value=c.host||'';$('tbToken').value=c.token||'';$('tbOn').checked=!!c.on})();
+['tbHost','tbToken','tbOn'].forEach(id=>$(id).addEventListener('change',tbSaveCfg));
+$('tbTest').onclick=()=>{tbSaveCfg();const c=tbCfg();
+  if(!c.host||!c.token||!c.on){$('tbMsg').textContent='กรอก Host, Token และติ๊ก "ส่ง log อัตโนมัติ" ก่อน';return}
+  tbSend({event:'test'})};
 $('connect').onclick=connect;
 $('send').onclick=()=>sendBytes(pack());
 
