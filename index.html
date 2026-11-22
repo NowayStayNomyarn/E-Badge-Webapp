@@ -330,7 +330,7 @@ async function connectBle(){
 
 
 // ---------- Wokwi demo transport (MQTT) : จำลอง BLE characteristic ตัวเดิมผ่าน topic ----------
-// web -> sketch: ctrl (ข้อความ "1"/"2"), data (base64), link (ข้อความ URL, ว่าง = ยกเลิก)
+// web -> sketch: ctrl (ข้อความ "1"/"2"), data ("offset:base64"), link (ข้อความ URL, ว่าง = ยกเลิก)
 // sketch -> web: stat (ตัวเลขสถานะ), nfc (UID), online ("1"/"0")
 const MQ_URL='wss://broker.hivemq.com:8884/mqtt',ID_KEY='epaper_badge_wokwi_id',MODE_KEY='epaper_badge_mode';
 let mq=null,mqBase='';
@@ -341,17 +341,19 @@ function connectWokwi(){
   try{localStorage.setItem(ID_KEY,id)}catch(e){}
   if(mq)mq.end(true);
   mqBase='epaper-badge/'+id+'/';
-  const pub=(t,m)=>mq.publish(mqBase+t,m);
+  // QoS 1 + รอ PUBACK ทีละ chunk + ใส่ offset ให้ sketch เขียนลงตำแหน่งที่ถูกต้อง (กัน chunk หายระหว่างทาง)
+  let mqOff=0;
+  const pub=(t,m)=>new Promise((res,rej)=>mq.publish(mqBase+t,m,{qos:1},e=>e?rej(e):res()));
   ch={
-    ctrl:{writeValueWithResponse:async b=>pub('ctrl',String(b[0]))},
-    data:{writeValueWithoutResponse:async b=>{pub('data',b64(b));await sleep(12)}},
-    link:{writeValueWithResponse:async b=>pub('link',new TextDecoder().decode(b))}
+    ctrl:{writeValueWithResponse:async b=>{if(b[0]===1)mqOff=0;await pub('ctrl',String(b[0]))}},
+    data:{writeValueWithoutResponse:async b=>{const o=mqOff;await pub('data',o+':'+b64(b));mqOff=o+b.length}},
+    link:{writeValueWithResponse:async b=>{await pub('link',new TextDecoder().decode(b))}}
   };
   dev={name:'Wokwi ('+id+')',gatt:{connected:false}};
   const off=()=>{if(dev)dev.gatt.connected=false;$('send').disabled=true;$('writeNfc').disabled=true};
   say('กำลังเชื่อมต่อ broker...');
   mq=mqtt.connect(MQ_URL,{clientId:'web-'+Math.random().toString(16).slice(2,10),reconnectPeriod:3000});
-  mq.on('connect',()=>{mq.subscribe([mqBase+'online',mqBase+'stat',mqBase+'nfc']);say('เชื่อม broker แล้ว รอ Wokwi ออนไลน์ (กด ▶ ใน Wokwi)...')});
+  mq.on('connect',()=>{mq.subscribe([mqBase+'online',mqBase+'stat',mqBase+'nfc'],{qos:1});say('เชื่อม broker แล้ว รอ Wokwi ออนไลน์ (กด ▶ ใน Wokwi)...')});
   mq.on('close',()=>{if(dev&&dev.gatt.connected){say('การเชื่อมต่อหลุด');addLink('ตัดการเชื่อมต่อ')}off()});
   mq.on('error',e=>say('MQTT error: '+e.message));
   mq.on('message',(t,m)=>{
