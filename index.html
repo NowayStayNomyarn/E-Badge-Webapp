@@ -63,6 +63,13 @@ progress{width:100%;height:10px;margin-top:10px}
   </div>
 
   <div class="card">
+    <div class="grid" style="margin-bottom:12px">
+      <div><label for="tmode">โหมดเชื่อมต่อ</label>
+        <select id="tmode"><option value="ble">Bluetooth (ป้ายจริง)</option><option value="wokwi">Wokwi demo (MQTT)</option></select></div>
+      <div id="wokwiBox" hidden><label for="devid">Device ID (ตรงกับ DEVICE_ID ใน sketch.ino)</label>
+        <div class="row" style="flex-wrap:nowrap"><input type="text" id="devid" maxlength="32" autocomplete="off" placeholder="badge-xxxxxxxx"><button id="genId" type="button">สุ่ม</button></div></div>
+    </div>
+    <div class="hint" id="wokwiHint" hidden style="margin-bottom:10px">โหมด Wokwi ใช้ public broker ใครรู้ ID ก็ควบคุมได้ ใช้ ID สุ่มและห้ามส่งข้อมูลส่วนตัว · จอจำลองเป็นขาว-ดำ (สีแดงจะแสดงเป็นดำ)</div>
     <div class="row"><button class="primary" id="connect">เชื่อมต่อป้าย</button><button id="send" disabled>ส่งเข้าป้าย</button><span class="hint" id="msg" role="status">ยังไม่ได้เชื่อมต่อ</span></div>
     <progress id="prog" value="0" max="1" hidden></progress>
     <div class="meta">NFC ล่าสุด: <span id="uid">-</span></div>
@@ -160,6 +167,7 @@ progress{width:100%;height:10px;margin-top:10px}
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script>
 const W=296,H=128;
 const $=id=>document.getElementById(id);
@@ -296,7 +304,16 @@ function pack(){
   return out;
 }
 
-async function connect(){
+function onStat(c){
+  if(c===2){say('อัปเดตจอเสร็จแล้ว');$('prog').hidden=true;$('send').disabled=false;addImg(true)}
+  if(c===3){say('ป้ายรับข้อมูลไม่ครบ ลองส่งใหม่');$('prog').hidden=true;$('send').disabled=false;addImg(false)}
+  if(c===4)say('รอแตะการ์ด NFC ที่ป้าย (ภายใน 30 วินาที)...');
+  if(c===5){say('เขียนลิงก์ลงการ์ดสำเร็จ');nfcDone(true)}
+  if(c===6){say('เขียนการ์ดไม่สำเร็จ: ต้องเป็นการ์ด NTAG แตะค้างไว้แล้วลองใหม่');nfcDone(false)}
+}
+function onNfc(u){u=String(u).slice(0,64);$('uid').textContent=u;addLink('แตะ NFC: '+u)}
+
+async function connectBle(){
   if(!navigator.bluetooth){say('ต้องใช้ Chrome/Edge (iOS ไม่รองรับ Web Bluetooth)');return}
   try{
     dev=await navigator.bluetooth.requestDevice({filters:[{services:[UUID.svc]}]});
@@ -305,18 +322,57 @@ async function connect(){
     const svc=await(await dev.gatt.connect()).getPrimaryService(UUID.svc);
     for(const k of ['ctrl','data','stat','nfc','link'])ch[k]=await svc.getCharacteristic(UUID[k]);
     await ch.stat.startNotifications();await ch.nfc.startNotifications();
-    ch.stat.addEventListener('characteristicvaluechanged',e=>{
-      const c=e.target.value.getUint8(0);
-      if(c===2){say('อัปเดตจอเสร็จแล้ว');$('prog').hidden=true;$('send').disabled=false;addImg(true)}
-      if(c===3){say('ป้ายรับข้อมูลไม่ครบ ลองส่งใหม่');$('prog').hidden=true;$('send').disabled=false;addImg(false)}
-      if(c===4)say('รอแตะการ์ด NFC ที่ป้าย (ภายใน 30 วินาที)...');
-      if(c===5){say('เขียนลิงก์ลงการ์ดสำเร็จ');nfcDone(true)}
-      if(c===6){say('เขียนการ์ดไม่สำเร็จ: ต้องเป็นการ์ด NTAG แตะค้างไว้แล้วลองใหม่');nfcDone(false)}
-    });
-    ch.nfc.addEventListener('characteristicvaluechanged',e=>{const u=new TextDecoder().decode(e.target.value);$('uid').textContent=u;addLink('แตะ NFC: '+u)});
+    ch.stat.addEventListener('characteristicvaluechanged',e=>onStat(e.target.value.getUint8(0)));
+    ch.nfc.addEventListener('characteristicvaluechanged',e=>onNfc(new TextDecoder().decode(e.target.value)));
     say('เชื่อมต่อแล้ว: '+dev.name);$('send').disabled=false;$('writeNfc').disabled=false;addLink('เชื่อมต่อ');
   }catch(e){say('เชื่อมต่อไม่สำเร็จ: '+e.message)}
 }
+
+
+// ---------- Wokwi demo transport (MQTT) : จำลอง BLE characteristic ตัวเดิมผ่าน topic ----------
+// web -> sketch: ctrl (ข้อความ "1"/"2"), data (base64), link (ข้อความ URL, ว่าง = ยกเลิก)
+// sketch -> web: stat (ตัวเลขสถานะ), nfc (UID), online ("1"/"0")
+const MQ_URL='wss://broker.hivemq.com:8884/mqtt',ID_KEY='epaper_badge_wokwi_id',MODE_KEY='epaper_badge_mode';
+let mq=null,mqBase='';
+function connectWokwi(){
+  if(typeof mqtt==='undefined'){say('โหลด MQTT.js ไม่ได้ (ต้องต่อเน็ต)');return}
+  const id=$('devid').value.trim();
+  if(!/^[A-Za-z0-9_-]{6,32}$/.test(id)){say('Device ID ต้องเป็น a-z 0-9 - _ ยาว 6-32 ตัว');return}
+  try{localStorage.setItem(ID_KEY,id)}catch(e){}
+  if(mq)mq.end(true);
+  mqBase='epaper-badge/'+id+'/';
+  const pub=(t,m)=>mq.publish(mqBase+t,m);
+  ch={
+    ctrl:{writeValueWithResponse:async b=>pub('ctrl',String(b[0]))},
+    data:{writeValueWithoutResponse:async b=>{pub('data',b64(b));await sleep(12)}},
+    link:{writeValueWithResponse:async b=>pub('link',new TextDecoder().decode(b))}
+  };
+  dev={name:'Wokwi ('+id+')',gatt:{connected:false}};
+  const off=()=>{if(dev)dev.gatt.connected=false;$('send').disabled=true;$('writeNfc').disabled=true};
+  say('กำลังเชื่อมต่อ broker...');
+  mq=mqtt.connect(MQ_URL,{clientId:'web-'+Math.random().toString(16).slice(2,10),reconnectPeriod:3000});
+  mq.on('connect',()=>{mq.subscribe([mqBase+'online',mqBase+'stat',mqBase+'nfc']);say('เชื่อม broker แล้ว รอ Wokwi ออนไลน์ (กด ▶ ใน Wokwi)...')});
+  mq.on('close',()=>{if(dev&&dev.gatt.connected){say('การเชื่อมต่อหลุด');addLink('ตัดการเชื่อมต่อ')}off()});
+  mq.on('error',e=>say('MQTT error: '+e.message));
+  mq.on('message',(t,m)=>{
+    const k=t.slice(mqBase.length),s=m.toString().slice(0,200);   // ข้อมูลจาก public broker ไม่น่าเชื่อถือ
+    if(k==='online'){
+      if(s==='1'){dev.gatt.connected=true;say('เชื่อมต่อแล้ว: '+dev.name);$('send').disabled=false;$('writeNfc').disabled=false;addLink('เชื่อมต่อ')}
+      else{off();say('Wokwi ออฟไลน์ (กด ▶ ใน Wokwi)')}
+    }else if(k==='stat'){const c=parseInt(s,10);if(c>=0)onStat(c)}
+    else if(k==='nfc')onNfc(s);
+  });
+}
+function connect(){$('tmode').value==='wokwi'?connectWokwi():connectBle()}
+function applyMode(){
+  const w=$('tmode').value==='wokwi';
+  $('wokwiBox').hidden=!w;$('wokwiHint').hidden=!w;
+  try{localStorage.setItem(MODE_KEY,$('tmode').value)}catch(e){}
+}
+$('tmode').onchange=applyMode;
+$('genId').onclick=()=>{const a=new Uint8Array(6);crypto.getRandomValues(a);$('devid').value='badge-'+Array.from(a,x=>(x%36).toString(36)).join('')};
+try{const m=localStorage.getItem(MODE_KEY),i=localStorage.getItem(ID_KEY);if(m)$('tmode').value=m;if(i)$('devid').value=i}catch(e){}
+applyMode();
 
 async function sendBytes(bytes){
   if(!dev||!dev.gatt.connected){say('ยังไม่ได้เชื่อมต่อป้าย');return}
